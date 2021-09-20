@@ -1,0 +1,528 @@
+---
+title: "Lasso-Cox model"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r load packages}
+library(Hmisc)
+library(grid)
+library(lattice)
+library(Formula)
+library(rms)
+library(survival)
+library(glmnet)
+library(VIM)
+library(ggplot2)
+library(ggDCA)
+library(foreign)
+require(survMisc)
+require(survminer)
+library(nricens)
+library(survIDINRI)
+```
+
+```{r km curve for M1a}
+data_k<- read.csv("./0908KM.csv",header = T,sep = ",")
+fit2<-survfit(Surv(Survivalmonths,OS)~M1a,data=data_k)
+res2<-ggsurvplot(fit2,data=data_k,
+                main= "Survival curve" ,
+                font.y=16,
+                font.tickslab=14,
+                surv.median.line = "hv",
+                mark.time=F,
+                size=1,
+                break.time.by=12,
+                risk.table = TRUE,risk.table.y.text.col=TRUE,
+                risk.table.height=0.25,
+                xlim=c(0,84),
+                legend.labs=c("MPE","MPCE","STCL","PTIL"))
+res2$table <-res2$table +theme(axis.line = element_blank())
+res2$plot<-res2$plot+labs(title = "Survival Curves")
+print(res2)
+```
+
+```{r build lasso regression}
+mydata<-read.csv("./0908T.csv",header = T,sep = ",")
+x<-as.matrix(mydata[,c(2,3,4,5,6,7,8,9,10,11,12,13,14,15,17,18,21)])
+y<-as.matrix(mydata[,c(16,20)])
+colnames(y)=c("time","status")
+fit=glmnet(x,y,family="cox",alpha=1)
+print(fit)
+plot(fit,label=TRUE)
+plot(fit,xvar="lambda",label=TRUE)
+plot(fit,xvar="dev",label=TRUE)
+```
+
+```{r 5-fold for lambda}
+set.seed(123)
+fitcv <- cv.glmnet(x,y,family="cox",
+                   type.measure="deviance",
+                   nfolds = 5)
+plot(fitcv)
+```
+
+```{r confirmed variable}
+coef(fitcv,s="lambda.1se")
+```
+
+```{r build nomogram for training cohort with 1- and 2- years}
+mydata<-read.csv("./0908T.csv",header = T,sep = ",")
+mydata$Sex<-
+  factor(mydata$Sex,
+         levels = c(1,2),
+         labels = c("Male","Female"))
+mydata$Age<-
+  factor(mydata$Age,
+         levels = c(1,2),
+         labels = c("<60",">=60"))
+mydata$Histologic<-
+  factor(mydata$Histologic,
+         levels = c(1,2,3),
+         labels = c("Adenocarcinoma","SCC","Other NSCLC"))
+mydata$N<-
+  factor(mydata$N,
+         levels = c(2,3,4,5),
+         labels = c("N0","N1","N2","N3"))
+mydata$M1a<-
+  factor(mydata$M1a,
+         levels = c(1,3,4),
+         labels = c("MPE/MPCE","STCL","PTIL"))
+mydata$Grade<-
+  factor(mydata$Grade,
+         levels = c(2,3,4,5),
+         labels = c("Well differentiated","Moderately differentiated","Poorly differentiated","Undifferentiated"))
+mydata$SurgPrimSite<-
+  factor(mydata$SurgPrimSite,
+         levels = c(1,2),
+         labels = c("No","Yes"))
+mydata$ScopeRegLNSur<-
+  factor(mydata$ScopeRegLNSur,
+         levels = c(1,2),
+         labels = c("No","Yes"))
+mydata$Chemotherapy<-
+  factor(mydata$Chemotherapy,
+         levels = c(1,2),
+         labels = c("Yes","No/Unknown"))
+dd=datadist(mydata)
+options(datadist="dd")
+f<-cph(Surv(Survivalmonths,OS)~Sex+Age+Histologic+N+Grade+SurgPrimSite+ScopeRegLNSur+Chemotherapy+M1a,data = mydata,x=T,y=T,surv = T)
+survival<-Survival(f)
+survival1<-function(x)survival(12,lp=x)
+survival2<-function(x)survival(2*12,lp=x)
+nom<-nomogram(f,fun = list(survival1,survival2),lp=F,funlabel = c('1-year survival','2-year survival'),maxscale = 10,fun.at = c(1.00,0.95,0.9,0.85,0.8,0.75,0.7,0.6,0.5,0.4,0.3,0.2,0.1,0))
+plot(nom)
+```
+
+```{r calculate c-index LASSO}
+xixilasso<-coxph(Surv(Survivalmonths,OS)~Sex+Age+Histologic+N+Grade+SurgPrimSite+ScopeRegLNSur+Chemotherapy+M1a,data = mydata)
+sum.surv<- summary(xixilasso)
+c_index2<-sum.surv$concordance
+c_index2
+```
+
+```{r 95%CI for C-index}
+ul_tra1<-0.661195775+1.96*0.005691572
+dl_tra1<-0.661195775-1.96*0.005691572
+ul_tra1
+dl_tra1
+```
+
+```{r calculate c-index LASSO-v}
+mydataV<-read.csv("./0908V.csv",header = T,sep = ",")
+xixilasso2<-coxph(Surv(Survivalmonths,OS)~Sex+Age+Histologic+N+Grade+SurgPrimSite+ScopeRegLNSur+Chemotherapy+M1a,data = mydataV)
+sum.surv_lasso<- summary(xixilasso2)
+c_index3<-sum.surv_lasso$concordance
+c_index3
+```
+
+```{r 95%CI for C-index}
+ul_tra2<-0.68751908+1.96*0.00850063
+dl_tra2<-0.68751908-1.96*0.00850063
+ul_tra2
+dl_tra2
+```
+
+```{r calibration for training cohort}
+coxm_1<-cph(Surv(Survivalmonths,OS)~Sex+Age+Histologic+N+Grade+SurgPrimSite+ScopeRegLNSur+Chemotherapy+M1a,data = mydata,x=T,y=T,surv = T,time.inc=12)
+cal_1<-calibrate(coxm_1,u=12,cmethod='KM',m=647,B=1000)
+
+par(mar=c(7,4,4,3),cex=1.0)
+plot(cal_1,lwd=2,lty=1, 
+     errbar.col=c(rgb(0,118,192,maxColorValue = 255)), 
+     xlab='Nomogram predicted of 1-year survival',
+     ylab='Actual 1-year survival',
+     col=c(rgb(192,98,83,maxColorValue = 255)),
+     xlim = c(0,1),ylim = c(0,1)) 
+coxm_2 <-cph(Surv(Survivalmonths,OS)~Sex+Age+Histologic+N+Grade+SurgPrimSite+ScopeRegLNSur+Chemotherapy+M1a,data = mydata,x=T,y=T,surv = T,time.inc=24)
+cal_2<-calibrate(coxm_2,u=24,cmethod='KM',m=647,B=1000)
+plot(cal_2,lwd=2,lty=1,
+     errbar.col=c(rgb(0,118,192,maxColorValue = 255)),
+     xlab='Nomogram predicted of 2-year survival',
+     ylab='Actual 2-year survival',
+     col=c(rgb(192,98,83,maxColorValue = 255)),
+     xlim = c(0,1),ylim = c(0,1))
+```
+```{r calibration for validation cohort}
+mydata<-read.csv("./0908T.csv",header = T,sep = ",")
+mydataV<-read.csv("./0908V.csv",header = T,sep = ",")
+f<-cph(Surv(Survivalmonths,OS)~Sex+Age+Histologic+N+Grade+SurgPrimSite+ScopeRegLNSur+Chemotherapy+M1a,data = mydata,x=T,y=T,surv = T)
+f5<-cph(Surv(Survivalmonths,OS)~Sex+Age+Histologic+N+Grade+SurgPrimSite+ScopeRegLNSur+Chemotherapy+M1a,data = mydataV,x=T,y=T,surv = T)
+fev<-cph(Surv(Survivalmonths,OS)~predict(f,newdata = mydataV),x=T,y=T,surv = T,data = mydataV,time.inc = 12)
+validate(fev,method = "boot",B=1000,dxy = T)
+rcorrcens(Surv(Survivalmonths,OS)~predict(f,newdata = mydataV),data=mydataV)
+fev3<-cph(Surv(Survivalmonths,OS)~predict(f,newdata = mydataV),x=T,y=T,surv = T,data = mydataV,time.inc = 12)
+calev3<-calibrate(fev3,cmethod = "KM",method = "boot",u=12,m=302,B=1000)
+plot(calev3,lwd=2,lty=1,
+     errbar.col=c(rgb(0,118,192,maxColorValue = 255)),
+     xlim = c(0,1),ylim = c(0,1),
+     xlab = "Nomogram predicted of 1-year survival",
+     ylab="Actual 1-year survival",
+     col=c(rgb(192,98,83,maxColorValue = 255)))
+
+#---2-year---
+fev4<-cph(Surv(Survivalmonths,CSS)~predict(f,newdata = mydataV),x=T,y=T,surv = T,data = mydataV,time.inc = 24)
+validate(fev4,method = "boot",B=1000,dxy = T)
+rcorrcens(Surv(Survivalmonths,CSS)~predict(f,newdata = mydataV),data=mydataV)
+fev5<-cph(Surv(Survivalmonths,CSS)~predict(f,newdata = mydataV),x=T,y=T,surv = T,data = mydataV,time.inc = 24)
+calev4<-calibrate(fev5,cmethod = "KM",method = "boot",u=24,m=302,B=1000)
+plot(calev4,lwd=2,lty=1,
+     errbar.col=c(rgb(0,118,192,maxColorValue = 255)),
+     xlim = c(0,1),ylim = c(0,1),
+     xlab = "Nomogram predicted of 2-year survival",
+     ylab="Actual 2-year survival",
+     col=c(rgb(192,98,83,maxColorValue = 255)))
+```
+
+```{r calculate 1-year IDI for nomogram}
+mydataV<-read.csv("./0908V.csv",header = T,sep = ",")
+mstd<- coxph(Surv(mydataV$Survivalmonths,mydataV$OS==1)~T+N,x=TRUE,data=mydataV)
+mnew<- coxph(Surv(mydataV$Survivalmonths,mydataV$OS==1)~Sex+Age+Histologic+N+Grade+SurgPrimSite+ScopeRegLNSur+M1a+Chemotherapy,x=TRUE,data=mydataV)
+srv<-Surv(mydataV$Survivalmonths,mydataV$OS)
+mydataV$oldone.years.Survival.Probability<-c(1-(summary(survfit(mstd,newdata=mydataV),times=12)$surv))
+mydataV$newone.years.Survival.Probability<-c(1-(summary(survfit(mnew,newdata=mydataV),times=12)$surv))
+mydataevent<-mydataV[mydataV$OS==1,]
+mydatanonevent<-mydataV[mydataV$OS==0,]
+IDIevent<-mydataevent$newone.years.Survival.Probability-mydataevent$oldone.years.Survival.Probability
+IDInonevent<-mydatanonevent$newone.years.Survival.Probability-mydatanonevent$oldone.years.Survival.Probability
+mean(IDIevent)
+mean(IDInonevent)
+IDI=mean(IDIevent)-mean(IDInonevent)
+IDI
+```
+
+```{r calculate P-value for IDI}
+SEevent=sd(IDIevent)/sqrt(length(IDIevent))
+SEnonevent=sd(IDInonevent)/sqrt(length(IDInonevent))
+Z=IDI/sqrt(SEevent*SEevent+SEnonevent*SEnonevent)
+Z
+P=1-pnorm(Z)
+P
+```
+
+```{r calculate 2-year IDI for nomogram}
+mydataV$oldtwo.years.Survival.Probability<-c(1-(summary(survfit(mstd,newdata=mydataV),times=24)$surv))
+mydataV$newtwo.years.Survival.Probability<-c(1-(summary(survfit(mnew,newdata=mydataV),times=24)$surv))
+mydataeventV<-mydataV[mydataV$OS==1,]
+mydatanoneventV<-mydataV[mydataV$OS==0,]
+IDIeventV<-mydataeventV$newtwo.years.Survival.Probability-mydataeventV$oldtwo.years.Survival.Probability
+IDInoneventV<-mydatanoneventV$newtwo.years.Survival.Probability-mydatanoneventV$oldtwo.years.Survival.Probability
+mean(IDIeventV)
+mean(IDInoneventV)
+IDI_V=mean(IDIeventV)-mean(IDInoneventV)
+IDI_V
+```
+
+```{r calculate P-value for IDI}
+SEeventV=sd(IDIeventV)/sqrt(length(IDIeventV))
+SEnoneventV=sd(IDInoneventV)/sqrt(length(IDInoneventV))
+Z_V=IDI_V/sqrt(SEeventV*SEeventV+SEnoneventV*SEnoneventV)
+Z_V
+P_V=1-pnorm(Z_V)
+P_V
+```
+
+```{r calculate IDI and NRI }
+mydataV<-read.csv("./0908V.csv",header = T,sep = ",")
+outcome=mydataV[,c(16,20)]
+covs0<-as.matrix(mydataV[,c(8,9)])
+covs1<-as.matrix(mydataV[,c(2,4,7,9,10,11,12,15,18)])
+t0=12
+x1<-IDI.INF(outcome, covs0, covs1, t0, npert=1000)
+t1=24
+x2<-IDI.INF(outcome, covs0, covs1, t1, npert=1000)
+```
+#$m1 IDI-1Y
+#               2.5%     97.5%           
+#0.1455665 0.1171091 0.1768228 0.0000000 
+
+#$m2 NRI-1Y
+#               2.5%     97.5%           
+#0.3265901 0.2770835 0.3794887 0.0000000 
+
+#$m1 IDI-2Y
+#                 2.5%      97.5%            
+#0.12633523 0.09356369 0.16461594 0.00000000 
+
+#$m2 NRI-2Y
+#               2.5%     97.5%           
+#0.3023232 0.2203100 0.3879639 0.0000000 
+
+```{r plot DCA curve}
+vad<-read.csv("./0908V.csv",header = T,sep = ",")
+Srv = Surv(vad$Survivalmonths, vad$OS)
+
+coxmod1 = coxph(Srv ~ Sex+Age+Histologic+N+Grade+SurgPrimSite+ScopeRegLNSur+M1a+Chemotherapy, data=vad)
+vad$model1 = c(1 - (summary(survfit(coxmod1,newdata=vad), times=12)$surv))
+source("stdca.R")
+
+mod1<-stdca(data=vad, outcome="OS", ttoutcome="Survivalmonths", timepoint=12, 
+                 predictors="model1", cmprsk=TRUE, smooth=TRUE, xstop=1.0)
+
+vad$model2 = c(1 - (summary(survfit(coxmod1,newdata=vad), times=24)$surv))
+mod2<-stdca(data=vad, outcome="OS", ttoutcome="Survivalmonths", timepoint=24, 
+                 predictors="model2",cmprsk=TRUE, smooth=TRUE, xstop=1.0)
+#AJCC
+coxmod2=coxph(Srv~T+N,data=vad)
+vad$model3=c(1-(summary(survfit(coxmod2,newdata=vad),times=12)$surv))
+mod3<-stdca(data=vad,outcome="OS",ttoutcome="Survivalmonths",timepoint=12,
+            predictors="model3",cmprsk=TRUE,smooth=TRUE,xstop=1.0)
+vad$model4=c(1-(summary(survfit(coxmod2,newdata=vad),times=24)$surv))
+mod4<-stdca(data=vad,outcome="OS",ttoutcome="Survivalmonths",timepoint=24,
+            predictors="model4",cmprsk=TRUE,smooth=TRUE,xstop=1.0)
+```
+
+```{r ROC-T}
+library(rms)
+library(foreign)
+library(survival)
+source("stdca.R")
+mydata<-read.csv("./0908T.csv",header = T,sep = ",")
+mydata$Sex<-
+  factor(mydata$Sex,
+         levels = c(1,2),
+         labels = c("Male","Female"))
+mydata$Age<-
+  factor(mydata$Age,
+         levels = c(1,2),
+         labels = c("<60",">=60"))
+mydata$Histologic<-
+  factor(mydata$Histologic,
+         levels = c(1,2,3),
+         labels = c("Adenocarcinoma","SCC","Other NSCLC"))
+mydata$N<-
+  factor(mydata$N,
+         levels = c(2,3,4,5),
+         labels = c("N0","N1","N2","N3"))
+mydata$M1a<-
+  factor(mydata$M1a,
+         levels = c(1,3,4),
+         labels = c("MPE/MPCE","STCL","PTIL"))
+mydata$Grade<-
+  factor(mydata$Grade,
+         levels = c(2,3,4,5),
+         labels = c("Well differentiated","Moderately differentiated","Poorly differentiated","Undifferentiated"))
+mydata$SurgPrimSite<-
+  factor(mydata$SurgPrimSite,
+         levels = c(1,2),
+         labels = c("No","Yes"))
+mydata$ScopeRegLNSur<-
+  factor(mydata$ScopeRegLNSur,
+         levels = c(1,2),
+         labels = c("No","Yes"))
+mydata$Chemotherapy<-
+  factor(mydata$Chemotherapy,
+         levels = c(1,2),
+         labels = c("Yes","No/Unknown"))
+library(survivalROC)
+nobs<-NROW(mydata)
+cutoff1<-12
+cutoff2<-24
+Srv<-Surv(mydata$Survivalmonths,mydata$OS)
+coxmod=coxph(Srv~Sex+Age+Histologic+N+Grade+SurgPrimSite+ScopeRegLNSur+M1a+Chemotherapy,data=mydata)
+summary(coxmod)
+
+Sexn<-as.numeric(mydata$Sex)
+mydata$sexpoint<-ifelse(Sexn==1,0,-0.18684)
+
+Agen<-as.numeric(mydata$Age)
+mydata$agepoint<-ifelse(Agen==1,0,0.22060)
+
+Histologicn<-as.numeric(mydata$Histologic)
+mydata$histologicpoint<-ifelse(Histologicn==1,0,ifelse(Histologicn==2,0.11965,0.15452))
+
+Nn<-as.numeric(mydata$N)
+mydata$npoint<-ifelse(Nn==1,0,ifelse(Nn==2,0.24976,ifelse(Nn==3,0.32083,0.46936)))
+
+Graden<-as.numeric(mydata$Grade)
+mydata$gradepoint<-ifelse(Graden==1,0,ifelse(Graden==2,0.06653,ifelse(Graden==3,0.32674,0.29878)))
+
+SurgPrimSiten<-as.numeric(mydata$SurgPrimSite)
+mydata$surgPrimSitepoint<-ifelse(SurgPrimSiten==1,0,-0.52400)
+
+ScopeRegLNSurn<-as.numeric(mydata$ScopeRegLNSur)
+mydata$scopeRegLNSurpoint<-ifelse(SurgPrimSiten==1,0,-0.37941)
+
+M1an<-as.numeric(mydata$M1a)
+mydata$m1apoint<-ifelse(M1an==1,0,ifelse(M1an==2,-0.16824,-0.20792))
+
+Chemotherapyn<-as.numeric(mydata$Chemotherapy)
+mydata$chemotherapypoint<-ifelse(Chemotherapyn==1,0,0.55597)
+
+mydata$PI<-mydata$points<-rowSums(mydata[,c("sexpoint","agepoint","histologicpoint","npoint","gradepoint","surgPrimSitepoint","scopeRegLNSurpoint","m1apoint","chemotherapypoint")])
+data<-mydata[which(mydata$OS!="NA"),]
+SROC=survivalROC(Stime = data$Survivalmonths,status = data$OS,marker=data$PI,predict.time = cutoff1,method = "KM")
+cut.op=SROC$cut.values[which.max(SROC$TP-SROC$FP)]
+cut.op
+#[1] 0.52172
+
+plot(SROC$FP,SROC$TP,
+     type="l",xlim=c(0,1),ylim=c(0,1),
+     xlab=paste("FP","\n","AUC=",round(SROC$AUC,3)),
+     ylab="TP",col="red")
+abline(0,1)
+legend("bottomright",c("One Year Survival Probability PI"),col="red",lty=c(1,1))
+
+SROC=survivalROC(Stime = data$Survivalmonths,status = data$OS,marker=data$PI,predict.time = cutoff2,method = "KM")
+cut.op1=SROC$cut.values[which.max(SROC$TP-SROC$FP)]
+cut.op1
+#[1] 0.26742
+plot(SROC$FP,SROC$TP,
+     type="l",xlim=c(0,1),ylim=c(0,1),
+     xlab=paste("FP","\n","AUC=",round(SROC$AUC,3)),
+     ylab="TP",col="red")
+abline(0,1)
+legend("bottomright",c("Two Year Survival Probability PI"),col="red",lty=c(1,1))
+```
+
+```{r ROC-V}
+library(rms)
+library(foreign)
+library(survival)
+source("stdca.R")
+mydataV<-read.csv("./0908V.csv",header = T,sep = ",")
+mydataV$Sex<-
+  factor(mydataV$Sex,
+         levels = c(1,2),
+         labels = c("Male","Female"))
+mydataV$Age<-
+  factor(mydataV$Age,
+         levels = c(1,2),
+         labels = c("<60",">=60"))
+mydataV$Histologic<-
+  factor(mydataV$Histologic,
+         levels = c(1,2,3),
+         labels = c("Adenocarcinoma","SCC","Other NSCLC"))
+mydataV$N<-
+  factor(mydataV$N,
+         levels = c(2,3,4,5),
+         labels = c("N0","N1","N2","N3"))
+mydataV$M1a<-
+  factor(mydataV$M1a,
+         levels = c(1,3,4),
+         labels = c("MPE/MPCE","STCL","PTIL"))
+mydataV$Grade<-
+  factor(mydataV$Grade,
+         levels = c(2,3,4,5),
+         labels = c("Well differentiated","Moderately differentiated","Poorly differentiated","Undifferentiated"))
+mydataV$SurgPrimSite<-
+  factor(mydataV$SurgPrimSite,
+         levels = c(1,2),
+         labels = c("No","Yes"))
+mydataV$ScopeRegLNSur<-
+  factor(mydataV$ScopeRegLNSur,
+         levels = c(1,2),
+         labels = c("No","Yes"))
+mydataV$Chemotherapy<-
+  factor(mydataV$Chemotherapy,
+         levels = c(1,2),
+         labels = c("Yes","No/Unknown"))
+library(survivalROC)
+nobs<-NROW(mydataV)
+cutoff1<-12
+cutoff2<-24
+Srv<-Surv(mydataV$Survivalmonths,mydataV$OS)
+coxmoda=coxph(Srv~Sex+Age+Histologic+N+Grade+SurgPrimSite+ScopeRegLNSur+M1a+Chemotherapy,data=mydataV)
+summary(coxmoda)
+
+Sexn1<-as.numeric(mydataV$Sex)
+mydataV$sexpoint<-ifelse(Sexn1==1,0,-0.07111)
+
+Agen1<-as.numeric(mydataV$Age)
+mydataV$agepoint<-ifelse(Agen1==1,0,0.14785)
+
+Histologicn1<-as.numeric(mydataV$Histologic)
+mydataV$histologicpoint<-ifelse(Histologicn1==1,0,ifelse(Histologicn1==2,0.23993,0.28833))
+
+Nn1<-as.numeric(mydataV$N)
+mydataV$npoint<-ifelse(Nn1==1,0,ifelse(Nn1==2,0.19551,ifelse(Nn1==3,0.42650,0.56393)))
+
+Graden1<-as.numeric(mydataV$Grade)
+mydataV$gradepoint<-ifelse(Graden1==1,0,ifelse(Graden1==2,0.07895,ifelse(Graden1==3,0.36908,0.07323)))
+
+SurgPrimSiten1<-as.numeric(mydataV$SurgPrimSite)
+mydataV$surgPrimSitepoint<-ifelse(SurgPrimSiten1==1,0,-0.38865)
+
+ScopeRegLNSurn1<-as.numeric(mydataV$ScopeRegLNSur)
+mydataV$scopeRegLNSurpoint<-ifelse(SurgPrimSiten1==1,0,-0.40473)
+
+M1an1<-as.numeric(mydataV$M1a)
+mydataV$m1apoint<-ifelse(M1an1==1,0,ifelse(M1an1==2,-0.34570,-0.44786))
+
+Chemotherapyn1<-as.numeric(mydataV$Chemotherapy)
+mydataV$chemotherapypoint<-ifelse(Chemotherapyn1==1,0,0.78734)
+
+mydataV$PI<-mydataV$points<-rowSums(mydataV[,c("sexpoint","agepoint","histologicpoint","npoint","gradepoint","surgPrimSitepoint","scopeRegLNSurpoint","m1apoint","chemotherapypoint")])
+dataV<-mydataV[which(mydataV$OS!="NA"),]
+SROC1=survivalROC(Stime = dataV$Survivalmonths,status = dataV$OS,marker=dataV$PI,predict.time = cutoff1,method = "KM")
+cut.op2=SROC1$cut.values[which.max(SROC1$TP-SROC1$FP)]
+cut.op2
+#[1] 0.79284
+plot(SROC1$FP,SROC1$TP,
+     type="l",xlim=c(0,1),ylim=c(0,1),
+     xlab=paste("FP","\n","AUC=",round(SROC1$AUC,3)),
+     ylab="TP",col="red")
+abline(0,1)
+legend("bottomright",c("One Year Survival Probability PI"),col="red",lty=c(1,1))
+
+SROC2=survivalROC(Stime = dataV$Survivalmonths,status = dataV$OS,marker=dataV$PI,predict.time = cutoff2,method = "KM")
+cut.op3=SROC2$cut.values[which.max(SROC2$TP-SROC2$FP)]
+cut.op3
+#[1] 0.76052
+plot(SROC2$FP,SROC2$TP,
+     type="l",xlim=c(0,1),ylim=c(0,1),
+     xlab=paste("FP","\n","AUC=",round(SROC2$AUC,3)),
+     ylab="TP",col="red")
+abline(0,1)
+legend("bottomright",c("Two Year Survival Probability PI"),col="red",lty=c(1,1))
+```
+```{r }
+mydataV<-read.csv("./0908V.csv",header = T,sep = ",")
+fit1<-coxph(Surv(Survivalmonths,OS)~Sex+Age+Histologic+N+Grade+SurgPrimSite+ScopeRegLNSur+Chemotherapy+M1a,data = mydataV)
+summary(fit1)
+```
+
+```{r Cox-Snell residual plot}
+mydataV$resid_mart<-residuals(fit1, type="martingale")
+mydataV$resid_coxsnell<- -(mydataV$resid_mart - mydataV$OS)
+fit_coxsnell <- coxph(formula = Surv(resid_coxsnell, OS) ~ 1,
+                      data    = mydataV,
+                      ties    = c("efron","breslow","exact")[1])
+df_base_haz <- basehaz(fit_coxsnell, centered = FALSE)
+ggplot(data = df_base_haz, mapping = aes(x = time, y = hazard)) +
+    geom_point() +
+    scale_x_continuous(limit = c(0,3.5)) +
+    scale_y_continuous(limit = c(0,3.5)) +
+    labs(x = "Cox-Snell residuals as pseudo observed times",
+         y = "Estimated cumulative hazard at pseudo observed times") +
+    theme_bw() + theme(legend.key = element_blank())
+```
